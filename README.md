@@ -3,106 +3,185 @@ Self-Driving Car Engineer Nanodegree Program
 
 ---
 
-## Dependencies
+## Description
+This repo contains the implementation of a Model-Predictive Control (MPC) in C++. The code takes input from a car simulator, computes the optimal solution to make the car follow a road and output the control signals (steering angle and throttle) to the simulator to actually control the car.
 
-* cmake >= 3.5
- * All OSes: [click here for installation instructions](https://cmake.org/install/)
-* make >= 4.1(mac, linux), 3.81(Windows)
-  * Linux: make is installed by default on most Linux distros
-  * Mac: [install Xcode command line tools to get make](https://developer.apple.com/xcode/features/)
-  * Windows: [Click here for installation instructions](http://gnuwin32.sourceforge.net/packages/make.htm)
-* gcc/g++ >= 5.4
-  * Linux: gcc / g++ is installed by default on most Linux distros
-  * Mac: same deal as make - [install Xcode command line tools]((https://developer.apple.com/xcode/features/)
-  * Windows: recommend using [MinGW](http://www.mingw.org/)
-* [uWebSockets](https://github.com/uWebSockets/uWebSockets)
-  * Run either `install-mac.sh` or `install-ubuntu.sh`.
-  * If you install from source, checkout to commit `e94b6e1`, i.e.
-    ```
-    git clone https://github.com/uWebSockets/uWebSockets
-    cd uWebSockets
-    git checkout e94b6e1
-    ```
-    Some function signatures have changed in v0.14.x. See [this PR](https://github.com/udacity/CarND-MPC-Project/pull/3) for more details.
+Model-Predictive Control is an advanced control technique that uses a model of the object to control to predict the effect of the change in the variables and so tackle the _lag_ problem: the control signals don't affect the car immediately but after certain time has passed. If this is not taken into account, the controller will always work with old data.
 
-* **Ipopt and CppAD:** Please refer to [this document](https://github.com/udacity/CarND-MPC-Project/blob/master/install_Ipopt_CppAD.md) for installation instructions.
-* [Eigen](http://eigen.tuxfamily.org/index.php?title=Main_Page). This is already part of the repo so you shouldn't have to worry about it.
-* Simulator. You can download these from the [releases tab](https://github.com/udacity/self-driving-car-sim/releases).
-* Not a dependency but read the [DATA.md](./DATA.md) for a description of the data sent back from the simulator.
+As explained in [1]:
+>Model Predictive Control (MPC) is an advanced method of process control that has been in use in the process industries in chemical plants and oil refineries since the 1980s. MPC -also known as Receding horizon control or Moving horizon control- uses an explicit dynamic plant model to predict the effect of future reactions of the manipulated variables on the output and the control signal obtained by minimizing the cost function. This predication takes into account, constraints on both the inputs and outputs of the process. An optimal input sequence is calculated. The measurements are then sent back to the controller, and a new optimizing problem is solved.
+
+![Block diagram of an MPC controller][image1]
+
+In the case of the project, 
+* the **plant** is the car
+* the **manipulated variables** are the steering angle and the throttling
+
+The main control loop proceeds as follows:
+
+1. the current state of the vehicle is read from the simulator. The state includes the 2D position (_x_, _y_) as well as the actual linear velocity _v_, the orientation _psi_, and the errors _cte_ (cross-track error, or distance from the center line of the road) and _ePsi_ (difference from the desired orientation).
+
+This state comes from the simulator in global coordinates, and it is much more simpler to work if they are in car frame's, so we convert them
+
+```c++
+// j[1] is the data JSON object that comes from the simulator
+
+  // actual waypoints in global coordinates
+  vector<double> ptsx = j[1]["ptsx"];
+  vector<double> ptsy = j[1]["ptsy"];
+  // actual pose of the car
+  double px = j[1]["x"];
+  double py = j[1]["y"];
+  double psi = j[1]["psi"];
+  double v = j[1]["speed"];
+
+  // these vectors will store the waypoints in car's frame
+  vector<double> ptsx_car;
+  vector<double> ptsy_car;
+
+  for (int i = 0; i < ptsx.size(); i++) {
+    double dx = ptsx[i] - px;
+    double dy = ptsy[i] - py;
+    ptsx_car.push_back(dx * cos(-psi) - dy * sin(-psi));
+    ptsy_car.push_back(dx * sin(-psi) + dy * cos(-psi));
+  }
+```
+
+2. the state is fed into the solver, which computes the cost associated and tries to minimize it using the model equations, while respecting the constraints:
+
+```c++
+vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
+  bool ok = true;
+  typedef CPPAD_TESTVECTOR(double) Dvector;
+
+  double x = state[0];
+  double y = state[1];
+  double psi = state[2];
+  double v = state[3];
+  double cte = state[4];
+  double epsi = state[5];
+
+  // number of variables and constraints
+  size_t n_vars = N * 6 + (N - 1) * 2;
+  size_t n_constraints = N * 6;
+
+  // Initial value of the independent variables.
+  // SHOULD BE 0 besides initial state.
+  Dvector vars(n_vars);
+  for (int i = 0; i < n_vars; i++) {
+    vars[i] = 0;
+  }
+
+  // Set the initial variable values
+  vars[x_start] = x;
+  vars[y_start] = y;
+  vars[psi_start] = psi;
+  vars[v_start] = v;
+  vars[cte_start] = cte;
+  vars[epsi_start] = epsi;
+
+  Dvector vars_lowerbound(n_vars);
+  Dvector vars_upperbound(n_vars);
+
+  // Set all non-actuators upper and lowerlimits
+  // to the max negative and positive values.
+  for (int i = 0; i < delta_start; i++) {
+    vars_lowerbound[i] = -1.0e19;
+    vars_upperbound[i] = 1.0e19;
+  }
+
+  // The upper and lower limits of delta are set to -25 and 25
+  // degrees (values in radians).
+  for (int i = delta_start; i < a_start; i++) {
+    vars_lowerbound[i] = -0.436332;
+    vars_upperbound[i] = 0.436332;
+  }
+
+  // Acceleration/decceleration upper and lower limits.
+  for (int i = a_start; i < n_vars; i++) {
+    vars_lowerbound[i] = -1.0;
+    vars_upperbound[i] = 1.0;
+  }
+
+  // Lower and upper limits for the constraints
+  // Should be 0 besides initial state.
+  Dvector constraints_lowerbound(n_constraints);
+  Dvector constraints_upperbound(n_constraints);
+  for (int i = 0; i < n_constraints; i++) {
+    constraints_lowerbound[i] = 0;
+    constraints_upperbound[i] = 0;
+  }
+  constraints_lowerbound[x_start] = x;
+  constraints_lowerbound[y_start] = y;
+  constraints_lowerbound[psi_start] = psi;
+  constraints_lowerbound[v_start] = v;
+  constraints_lowerbound[cte_start] = cte;
+  constraints_lowerbound[epsi_start] = epsi;
+
+  constraints_upperbound[x_start] = x;
+  constraints_upperbound[y_start] = y;
+  constraints_upperbound[psi_start] = psi;
+  constraints_upperbound[v_start] = v;
+  constraints_upperbound[cte_start] = cte;
+  constraints_upperbound[epsi_start] = epsi;
+
+  // object that computes objective and constraints
+  FG_eval fg_eval(coeffs);
+
+  // options for IPOPT solver
+  std::string options;
+  options += "Integer print_level  0\n";
+  options += "Sparse  true        forward\n";
+  options += "Sparse  true        reverse\n";
+  options += "Numeric max_cpu_time          0.5\n";
+
+  // place to return solution
+  CppAD::ipopt::solve_result<Dvector> solution;
+
+  // solve the problem
+  CppAD::ipopt::solve<Dvector, FG_eval>(
+      options, vars, vars_lowerbound, vars_upperbound, constraints_lowerbound,
+      constraints_upperbound, fg_eval, solution);
+
+  // Check some of the solution values
+  ok &= solution.status == CppAD::ipopt::solve_result<Dvector>::success;
+
+  // Cost
+  auto cost = solution.obj_value;
+
+  vector<double> result;
+  // actuators for the first waypoint
+  result.push_back(solution.x[delta_start]);
+  result.push_back(solution.x[a_start]);
+  // add the rest of the computed points, to show in the simulator
+  for (int i = 0; i < N-1; i++) {
+    result.push_back(solution.x[x_start + i + 1]);
+    result.push_back(solution.x[y_start + i + 1]);
+  }
+
+  return result;
+}
+```
+
+Of paramount importance here is the _cost function_. The solver will compute the values of the actuators that minimize this function, so it will determine the behaviour of the controller.
+After several tries, I settle for the following cost function:
+
+![cost function][costfn]
+
+3. the result of the solver is a vector of the values that minimizes the cost. This vector contains the values of the actuators (steering angle, throttle) as well as the waypoint coordinates computed.
+
+![control equations][image2]
+
+4. the result of the solver is returned to the main loop where it is fed into the simulator. The actuators are used to control the vehicle, while the waypoints are displayed along with the reference trajectory.
+
+![reference and computed trajectories][image3]
 
 
-## Basic Build Instructions
 
-1. Clone this repo.
-2. Make a build directory: `mkdir build && cd build`
-3. Compile: `cmake .. && make`
-4. Run it: `./mpc`.
+## References
+[1]: *Design and Development of Model Predictive Controller for Binary Distillation Column*. R. Sivakumar, Shennes Mathew. International Journal of Science and Research (IJSR). ISSN (Online): 2319-7064
 
-## Tips
 
-1. It's recommended to test the MPC on basic examples to see if your implementation behaves as desired. One possible example
-is the vehicle starting offset of a straight line (reference). If the MPC implementation is correct, after some number of timesteps
-(not too many) it should find and track the reference line.
-2. The `lake_track_waypoints.csv` file has the waypoints of the lake track. You could use this to fit polynomials and points and see of how well your model tracks curve. NOTE: This file might be not completely in sync with the simulator so your solution should NOT depend on it.
-3. For visualization this C++ [matplotlib wrapper](https://github.com/lava/matplotlib-cpp) could be helpful.)
-4.  Tips for setting up your environment are available [here](https://classroom.udacity.com/nanodegrees/nd013/parts/40f38239-66b6-46ec-ae68-03afd8a601c8/modules/0949fca6-b379-42af-a919-ee50aa304e6a/lessons/f758c44c-5e40-4e01-93b5-1a82aa4e044f/concepts/23d376c7-0195-4276-bdf0-e02f1f3c665d)
-5. **VM Latency:** Some students have reported differences in behavior using VM's ostensibly a result of latency.  Please let us know if issues arise as a result of a VM environment.
-
-## Editor Settings
-
-We've purposefully kept editor configuration files out of this repo in order to
-keep it as simple and environment agnostic as possible. However, we recommend
-using the following settings:
-
-* indent using spaces
-* set tab width to 2 spaces (keeps the matrices in source code aligned)
-
-## Code Style
-
-Please (do your best to) stick to [Google's C++ style guide](https://google.github.io/styleguide/cppguide.html).
-
-## Project Instructions and Rubric
-
-Note: regardless of the changes you make, your project must be buildable using
-cmake and make!
-
-More information is only accessible by people who are already enrolled in Term 2
-of CarND. If you are enrolled, see [the project page](https://classroom.udacity.com/nanodegrees/nd013/parts/40f38239-66b6-46ec-ae68-03afd8a601c8/modules/f1820894-8322-4bb3-81aa-b26b3c6dcbaf/lessons/b1ff3be0-c904-438e-aad3-2b5379f0e0c3/concepts/1a2255a0-e23c-44cf-8d41-39b8a3c8264a)
-for instructions and the project rubric.
-
-## Hints!
-
-* You don't have to follow this directory structure, but if you do, your work
-  will span all of the .cpp files here. Keep an eye out for TODOs.
-
-## Call for IDE Profiles Pull Requests
-
-Help your fellow students!
-
-We decided to create Makefiles with cmake to keep this project as platform
-agnostic as possible. Similarly, we omitted IDE profiles in order to we ensure
-that students don't feel pressured to use one IDE or another.
-
-However! I'd love to help people get up and running with their IDEs of choice.
-If you've created a profile for an IDE that you think other students would
-appreciate, we'd love to have you add the requisite profile files and
-instructions to ide_profiles/. For example if you wanted to add a VS Code
-profile, you'd add:
-
-* /ide_profiles/vscode/.vscode
-* /ide_profiles/vscode/README.md
-
-The README should explain what the profile does, how to take advantage of it,
-and how to install it.
-
-Frankly, I've never been involved in a project with multiple IDE profiles
-before. I believe the best way to handle this would be to keep them out of the
-repo root to avoid clutter. My expectation is that most profiles will include
-instructions to copy files to a new location to get picked up by the IDE, but
-that's just a guess.
-
-One last note here: regardless of the IDE used, every submitted project must
-still be compilable with cmake and make./
-
-## How to write a README
-A well written README file can enhance your project and portfolio.  Develop your abilities to create professional README files by completing [this free course](https://www.udacity.com/course/writing-readmes--ud777).
+[image1]: ./images/mpc_blocks.png "Block diagram of an MPC controller"
+[image2]: ./images/ecuaciones.png "Ecuaciones de control"
+[image3]: ./images/simulator.png "Reference and computed trajectories"
