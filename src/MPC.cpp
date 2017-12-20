@@ -5,7 +5,7 @@
 
 using CppAD::AD;
 
-// TODO: Set the timestep length and duration
+// timestep length and duration
 size_t N = 10;
 double dt = 0.1;
 
@@ -23,7 +23,7 @@ const double Lf = 2.67;
 // coefficients for the cost
 const double cCte = 3000;
 const double cEig = 3000;
-const double cVel = 3;
+const double cVel = 5;
 const double cDelta = 5;
 const double cAccel = 5;
 const double cVDelta = 1000;
@@ -125,7 +125,7 @@ class FG_eval {
       // This is also CppAD can compute derivatives and pass
       // these to the solver.
 
-      // TODO: Setup the rest of the model constraints
+      // rest of the model constraints
       fg[1 + x_start + t] = x1 - (x0 + v0 * CppAD::cos(psi0) * dt);
       fg[1 + y_start + t] = y1 - (y0 + v0 * CppAD::sin(psi0) * dt);
       fg[1 + psi_start + t] = psi1 - (psi0 - v0/Lf * delta * dt);
@@ -256,11 +256,6 @@ vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   auto cost = solution.obj_value;
 //  std::cout << "Cost " << cost << std::endl;
 
-  // TODO: Return the first actuator values. The variables can be accessed with
-  // `solution.x[i]`.
-  //
-  // {...} is shorthand for creating a vector, so auto x1 = {1.0,2.0}
-  // creates a 2 element double vector.
   vector<double> result;
 
   result.push_back(solution.x[delta_start]);

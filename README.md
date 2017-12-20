@@ -168,6 +168,21 @@ After several tries, I settle for the following cost function:
 
 ![cost function][costfn]
 
+The factors that multiply each term give the relative weight of that term: the larger the coefficient, the larger the importance of that term on the cost.
+Tuning those factors we can get the solver to perform better on different circumstances. For the chosen reference speed (60), the following values give a good performance across the whole circuit:
+
+```c++
+const double cCte = 3000;
+const double cEig = 3000;
+const double cVel = 5;
+const double cDelta = 5;
+const double cAccel = 5;
+const double cVDelta = 1000;
+const double cSuddenDelta = 200;
+const double cSuddenAccel = 10;
+``` 
+
+
 3. the result of the solver is a vector of the values that minimizes the cost. This vector contains the values of the actuators (steering angle, throttle) as well as the waypoint coordinates computed.
 
 ![control equations][image2]
