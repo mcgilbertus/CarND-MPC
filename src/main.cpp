@@ -109,6 +109,7 @@ int main() {
 //            cout << "(" << ptsx_car[i] << "," << ptsy_car[i] << ")" << endl;
           }
 
+          // polyfit works with Eigen::VectorXd structures, so convert from the simple vector<double>
           Eigen::Map<Eigen::VectorXd> waypoints_x_eig(ptsx_car.data(), 6);
           Eigen::Map<Eigen::VectorXd> waypoints_y_eig(ptsy_car.data(), 6);
 
