@@ -14,6 +14,7 @@ using json = nlohmann::json;
 
 // For converting back and forth between radians and degrees.
 constexpr double pi() { return M_PI; }
+const double latency = 0.1;
 
 double deg2rad(double x) { return x * pi() / 180; }
 
@@ -114,15 +115,29 @@ int main() {
           Eigen::Map<Eigen::VectorXd> waypoints_y_eig(ptsy_car.data(), 6);
 
           auto coeffs = polyfit(waypoints_x_eig, waypoints_y_eig, 3);
-          double cte = polyeval(coeffs, 0);  // px = 0, py = 0
-          double epsi = -atan(coeffs[1]);  // p
+          //cte = desired_y - actual_y = polyeval(coeffs,px)-py
+          double cte = polyeval(coeffs, 0);  // as px = 0, py = 0 (car coordinates)
+          //epsi = actual_psi - desired_psi = psi - atan(coeffs[1]+coeffs[2]*2*px+...)
+          double epsi = -atan(coeffs[1]);  // because px = psi = 0
 
           // get actual steer angle and throttle from emulator
           double steer_value = j[1]["steering_angle"];
           double throttle_value = j[1]["throttle"];
 
-          // compute the new steer angle and throttle to minimize the cost function in MPC class
+          // compute state at t=latency
           Eigen::VectorXd state(6);
+          v *= 0.44704; //convert v to m/s
+          psi = steer_value; // in car coordinate now, so use steering angle to predict x and y
+          // px = px + v*cos(psi)*latency;
+          px = v*cos(psi)*latency;
+          //py = py + v*sin(psi)*latency;
+          py = v*sin(psi)*latency;
+          cte = cte + v*sin(epsi)*latency;
+          epsi = epsi + v*steer_value*latency/MPC::Lf;
+          //psi = psi + v*steer_value*latency/MPC::Lf;
+          psi = v*steer_value*latency/MPC::Lf;
+          v = v + throttle_value*latency;
+
           state << 0, 0, 0, v, cte, epsi;
           auto vars = mpc.Solve(state, coeffs);
           // result from solving the optimization problem
@@ -174,7 +189,7 @@ int main() {
           //
           // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
           // SUBMITTING.
-          this_thread::sleep_for(chrono::milliseconds(100));
+          this_thread::sleep_for(chrono::milliseconds((int)latency*1000));
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {
